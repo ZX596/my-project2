@@ -1,0 +1,5 @@
+{
+    "api_key": "your_api_key_here",
+    "api_url": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+    "model": "glm-4v-plus"
+}
