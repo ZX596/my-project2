@@ -23,7 +23,8 @@ class User(db.Model):
     password = db.Column(db.String(255), nullable=False, comment='加密后的密码')
     name = db.Column(db.String(50), nullable=False, comment='真实姓名')
     email = db.Column(db.String(100), comment='邮箱')
-    role = db.Column(db.Enum('student', 'teacher', 'admin'), nullable=False, default='student')
+    # ============ 修改：将 ENUM 改为 String ============
+    role = db.Column(db.String(20), nullable=False, default='student')  # 原来是 ENUM
     created_at = db.Column(db.TIMESTAMP, default=datetime.now)
     updated_at = db.Column(db.TIMESTAMP, default=datetime.now, onupdate=datetime.now)
             
@@ -37,7 +38,7 @@ class User(db.Model):
             return bcrypt.checkpw(password.encode('utf-8'), self.password.encode('utf-8'))
         except (ValueError, UnicodeDecodeError):
             # 如果bcrypt验证失败，检查是否是特定的已知哈希
-            known_hash = '$2b$12$K6fR2cVx9GqX9b5J8YzZVuJhLmN3P5Q7R9S1T3V5W7Y9Z1B3D5F7H9J1L'
+            known_hash = '$2b$12$5TCM9Bv38stmssJqvfWPDO.FsfGRdUP.YNQPwWfFOQ5mNNzJS2K.e'  # 123456的加密
             # 方法1：如果是已知的预置哈希且密码是"123456"
             if self.password == known_hash and password == "123456":
                 print(f"调试: 使用预置哈希验证用户 {self.username}")
@@ -78,11 +79,9 @@ class User(db.Model):
             # 生成正确的bcrypt哈希
             new_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
             # 更新数据库（需要数据库会话）
-            from flask import current_app
-            with current_app.app_context():
-                self.password = new_hash
-                db.session.commit()
-                print(f"已修复用户 {self.username} 的密码哈希")
+            self.password = new_hash
+            db.session.commit()
+            print(f"已修复用户 {self.username} 的密码哈希")
         except Exception as e:
             print(f"修复密码哈希失败: {e}")
 
@@ -108,14 +107,25 @@ class Permission(db.Model):
     def get_role_permissions(role):
         """获取角色权限"""
         from sqlalchemy import text
+        # 对于 SQLite，使用原生查询
         query = text("""
             SELECT p.code 
             FROM role_permissions rp
             JOIN permissions p ON rp.permission_code = p.code
             WHERE rp.role = :role
         """)
-        result = db.session.execute(query, {'role': role})
-        return [row[0] for row in result]
+        try:
+            result = db.session.execute(query, {'role': role})
+            return [row[0] for row in result]
+        except:
+            # 如果查询失败，返回默认权限
+            default_permissions = {
+                'admin': ['user_manage', 'batch_import', 'view_all_users', 'edit_profile', 
+                         'system_settings', 'view_logs', 'export_data'],
+                'teacher': ['view_all_users', 'edit_profile', 'manage_grades', 'export_data'],
+                'student': ['edit_profile', 'view_grades']
+            }
+            return default_permissions.get(role, [])
 
 class ImportLog(db.Model):
     """导入日志模型"""
@@ -136,7 +146,7 @@ class ImportLog(db.Model):
         if self.report_data:
             return json.loads(self.report_data)
         return {}
-#新增
+
 class File(db.Model):
     """文件模型"""
     __tablename__ = 'files'
@@ -187,7 +197,8 @@ class Certificate(db.Model):
     
     cert_id = db.Column(db.Integer, primary_key=True, comment='证书ID')
     submitter_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, comment='提交者user_id')
-    submitter_role = db.Column(db.Enum('student', 'teacher'), nullable=False, comment='提交者角色')
+    # ============ 修改：将 ENUM 改为 String ============
+    submitter_role = db.Column(db.String(20), nullable=False, comment='提交者角色')  # 原来是 ENUM
     student_id = db.Column(db.String(13), nullable=False, comment='学号（13位）')
     student_name = db.Column(db.String(50), nullable=False, comment='学生姓名')
     department = db.Column(db.String(100), comment='学生所在学院')
@@ -202,7 +213,8 @@ class Certificate(db.Model):
     file_path = db.Column(db.String(500), comment='证书文件路径')
     extraction_method = db.Column(db.String(50), comment='识别方式')
     extraction_confidence = db.Column(db.Numeric(5, 2), comment='识别置信度')
-    status = db.Column(db.Enum('draft', 'submitted'), nullable=False, default='draft', comment='状态')
+    # ============ 修改：将 ENUM 改为 String ============
+    status = db.Column(db.String(20), nullable=False, default='draft', comment='状态')  # 原来是 ENUM
     created_at = db.Column(db.TIMESTAMP, default=datetime.now, comment='创建时间')
     submitted_at = db.Column(db.TIMESTAMP, comment='提交时间')
     
@@ -282,13 +294,27 @@ class SystemConfig(db.Model):
         db.session.commit()
         return config
 
-#同样在下面的函数中新增代码
+class RolePermission(db.Model):
+    """角色权限关联模型"""
+    __tablename__ = 'role_permissions'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    role = db.Column(db.String(20), nullable=False, comment='角色名称')
+    permission_code = db.Column(db.String(50), nullable=False, comment='权限代码')
+    
+    def __repr__(self):
+        return f'<RolePermission {self.role} - {self.permission_code}>'
+
 class DatabaseManager:
     """数据库管理器"""
     
     @staticmethod
     def create_user(username, password, name, email, role):
         """创建用户"""
+        # 验证角色有效性
+        if role not in ['student', 'teacher', 'admin']:
+            raise ValueError(f'无效的角色: {role}')
+        
         # 加密密码
         hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
         
@@ -324,7 +350,6 @@ class DatabaseManager:
             return len(username) == 8 and username.isdigit()
         return False
     
-    
     @staticmethod
     def save_import_log(filename, import_by, total_records, success_count, 
                         failed_count, duplicate_count, report_data):
@@ -357,7 +382,7 @@ class DatabaseManager:
     def get_users_by_role(role):
         """根据角色获取用户"""
         return User.query.filter_by(role=role).all()
-    #新增
+    
     @staticmethod
     def add_file(user_id, filename, original_filename, file_path, file_type, file_size, description=None):
         """添加文件记录"""
@@ -429,6 +454,10 @@ class DatabaseManager:
                           advisor, file_id=None, file_path=None, **kwargs):
         """创建证书记录"""
         try:
+            # 验证提交者角色
+            if submitter_role not in ['student', 'teacher']:
+                return None, f"无效的提交者角色: {submitter_role}"
+            
             cert = Certificate(
                 submitter_id=submitter_id,
                 submitter_role=submitter_role,
@@ -468,7 +497,7 @@ class DatabaseManager:
             
             # 更新字段
             for key, value in kwargs.items():
-                if hasattr(cert, key):
+                if hasattr(cert, key) and value is not None:
                     setattr(cert, key, value)
             
             db.session.commit()
@@ -548,3 +577,60 @@ class DatabaseManager:
         """检查是否在截止时间之前"""
         deadline = DatabaseManager.get_submission_deadline()
         return datetime.now() <= deadline
+    
+    @staticmethod
+    def init_database_data():
+        """初始化数据库基础数据"""
+        try:
+            # 清空现有数据（可选）
+            # db.session.query(RolePermission).delete()
+            # db.session.query(Permission).delete()
+            
+            # 添加权限数据
+            permissions = [
+                {'name': '用户管理', 'code': 'user_manage', 'description': '管理用户信息'},
+                {'name': '批量导入', 'code': 'batch_import', 'description': '批量导入用户'},
+                {'name': '查看所有用户', 'code': 'view_all_users', 'description': '查看所有用户信息'},
+                {'name': '修改个人信息', 'code': 'edit_profile', 'description': '修改自己的个人信息'},
+                {'name': '查看个人成绩', 'code': 'view_grades', 'description': '学生查看成绩'},
+                {'name': '管理成绩', 'code': 'manage_grades', 'description': '教师管理成绩'},
+                {'name': '系统设置', 'code': 'system_settings', 'description': '管理系统设置'},
+                {'name': '查看日志', 'code': 'view_logs', 'description': '查看系统日志'},
+                {'name': '导出数据', 'code': 'export_data', 'description': '导出用户数据'},
+            ]
+            
+            for perm_data in permissions:
+                perm = Permission.query.filter_by(code=perm_data['code']).first()
+                if not perm:
+                    perm = Permission(**perm_data)
+                    db.session.add(perm)
+            
+            # 添加角色权限关联
+            role_permissions = [
+                ('admin', 'user_manage'),
+                ('admin', 'batch_import'),
+                ('admin', 'view_all_users'),
+                ('admin', 'edit_profile'),
+                ('admin', 'system_settings'),
+                ('admin', 'view_logs'),
+                ('admin', 'export_data'),
+                ('teacher', 'view_all_users'),
+                ('teacher', 'edit_profile'),
+                ('teacher', 'manage_grades'),
+                ('teacher', 'export_data'),
+                ('student', 'edit_profile'),
+                ('student', 'view_grades'),
+            ]
+            
+            for role, perm_code in role_permissions:
+                exists = RolePermission.query.filter_by(role=role, permission_code=perm_code).first()
+                if not exists:
+                    rp = RolePermission(role=role, permission_code=perm_code)
+                    db.session.add(rp)
+            
+            db.session.commit()
+            print("数据库基础数据初始化完成")
+            
+        except Exception as e:
+            db.session.rollback()
+            print(f"数据库初始化失败: {e}")
