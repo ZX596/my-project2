@@ -25,12 +25,23 @@ from urllib.parse import quote
 from flask import jsonify
 from datetime import datetime
 
+# ==================== 主要修改部分开始 ====================
+
 # 创建Flask应用
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your-secret-key-here-change-in-production'
-#app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+mysqlconnector://root:40%Zhengxue111@localhost/user_auth_system'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+mysqlconnector://root:%40Zhengxue111@localhost/user_auth_system'
+
+# ============ 修改数据库配置 ============
+# 原来的 MySQL 配置：
+# app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+mysqlconnector://root:40%Zhengxue111@localhost/user_auth_system'
+
+# 改为 SQLite 配置：
+basedir = os.path.abspath(os.path.dirname(__file__))
+app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{os.path.join(basedir, "user_auth_system.db")}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+# ==================== 主要修改部分结束 ====================
+
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
@@ -890,5 +901,20 @@ def admin_config():
 
 if __name__ == '__main__':
     with app.app_context():
-        db.create_all()
+        # ============ 修改数据库初始化 ============
+        try:
+            # 先检查数据库文件是否存在
+            db_file = os.path.join(basedir, "user_auth_system.db")
+            if not os.path.exists(db_file):
+                print("初始化数据库...")
+                from init_sqlite_db import init_sqlite_database
+                init_sqlite_database()
+            
+            # 创建所有表（如果不存在）
+            db.create_all()
+            print("数据库初始化完成")
+        except Exception as e:
+            print(f"数据库初始化错误: {e}")
+            # 继续运行，让用户界面仍然可以访问
+    
     app.run(debug=True, port=5000)
